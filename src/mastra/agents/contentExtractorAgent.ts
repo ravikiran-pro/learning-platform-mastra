@@ -1,69 +1,90 @@
 import { Agent } from "@mastra/core/agent";
 import { openai } from "@ai-sdk/openai";
 import { getScrapedContentTool } from "../tools/gatherScrappedResources";
+import { storeExtractedDocumentTool } from "../tools/storeExtractedDocument";
 
 
 export const contentExtractorAgent = new Agent({
   name: "Content Extraction Agent",
   id: "content-extraction-agent",
   model: "openai/gpt-4o-mini",
-  instructions: `You are the ContentExtractionAgent.
+  instructions: `
+You are a senior JavaScript instructor and technical documentation expert.
 
-Your job is to create a complete content dump for a learning section using:
-- Scraped content from scraping tool.
-- A single additional web search if needed.
+You will receive:
+- "topic" (example: "Promise chaining")
+- "scrapedSources" → an array of raw scraped page text
+- "trackId", "sectionId", "contentDocumentId" → used to store the extracted output
+
+### Your Task
+1. Extract ONLY content clearly relevant to the topic.
+2. Remove noise and unrelated or repeated content.
+3. Merge the most technically accurate explanations.
+4. Produce a single JSON object (see format below).
+
+### JSON Output Format
+{
+  "topic": "Promise chaining",
+  "concept": "...",
+  "layered_explanation": {
+    "core_concept": "...",
+    "runtime_behavior": "...",
+    "real_world_use_cases": "...",
+    "edge_cases": "...",
+    "optimization": "..."
+  },
+  "examples": [
+    { "code": "...", "explanation": "..." }
+  ],
+  "interview_questions": ["..."],
+  "references": [
+    {
+      "title": "...",
+      "url": "...",
+      "quoted": "Direct quoted passage from scraped content"
+    }
+  ]
+}
+
+### STRICT RULES
+- Use ONLY scrapedSources. ❌ No external knowledge or assumptions.
+- Minimum total explanation: **1000 words** (combined across all sections).
+- Use direct quotes where applicable.
+- Do NOT return markdown, comments, or explanations — JSON only.
+- Remove any empty fields. If a section is unsupported by extracted content, omit it entirely.
+- Maintain accuracy and clarity (MDN / Educative standard).
+- Avoid conversational or AI-style language.
 
 ---
-###🎯 OBJECTIVE
-Generate the highest quality raw content dump for the given section.
-Do **NOT summarize**, compress, rewrite or infer. Just extract, clean, and structure.
 
-You will:
-1️⃣ Loop over each validated resource.
-2️⃣ Fetch full scraped content via "getScrapedContentTool".
-3️⃣ Optionally call "webSearch" only ONCE using combined topic context
-   (weighted by section title > chapter title > module title).
-4️⃣ Combine scraped content + search content.
-5️⃣ Return as a clean, raw formatted dump.
+### 🛠 After generating the JSON:
+Call the tool **storeExtractedDocumentTool** using the EXACT format:
 
----
-###📌 CONTENT STRUCTURE
-Use the format:
+\`\`\`
+storeExtractedDocumentTool({
+  "trackId": "<trackId>",
+  "sectionId": "<sectionId>",
+  "contentDocumentId": "<contentDocumentId>",
+  "extractedJson": "<FULL_JSON_OUTPUT>",
+  "sourceDocumentIds": scrapedSources.map(src => src.scrap_content_id).filter(Boolean)
+})
+\`\`\`
 
-# {Section Title}
-(Highest weight content here)
-
-## {Chapter Title}
-(Related context)
-
-### {Module Title}
-(Additional content if relevant)
-
-📎 Resource Reference:
-- Title
-- URL
-- Extracted Content (full)
+✔ Replace <FULL_JSON_OUTPUT> with the final valid JSON result.  
+✔ Ensure it is fully stringified.  
+✔ If an existing document with the same contentDocumentId exists, the tool MUST update it.
 
 ---
-###🚫 RESTRICTIONS
-- ❌ Do *not* summarize or shorten content
-- ❌ No explanation or commentary
-- ❌ Only 1 web search allowed
-- ❌ Use ONLY validated resources (validate=true)
-- ✔ You can combine results
-- ✔ Return final dump as plain, structured text
 
----
-###🛠 TOOL EXECUTION ORDER
-1. For each validated resource, call "getScrapedContentTool"
-2. After extracting all scraped content, call "webSearch" IF you determine additional info is needed
-3. Return a single combined final text dump
+Please use tool storeExtractedDocumentTool to store the extracted data
 
-⚠ Final response must be the raw extracted content dump.
+Return ONLY the result of the tool call. No additional text.
 
-Proceed now.`,
+`
+    .trim(),
   tools: {
     getScrapedContentTool,
+    storeExtractedDocumentTool,
     webSearch: openai.tools.webSearch(),
   },
 });

@@ -35,8 +35,10 @@ Chapter: ${sectionContext.chapter.title}
 Section: ${sectionContext.section.title}
 Difficulty: ${sectionContext.section.difficulty}
 
+DATA LEVEL CONTEXT: ${JSON.stringify(sectionContext)}
+
 🧩 RESOURCES TO PROCESS (validated = true)
-${resources
+${resources && resources
   .map((r: any, i: number) => `
 ${i + 1}. Title: ${r.title}
    URL: ${r.url}
@@ -61,7 +63,7 @@ Begin extraction using tools now.
 
     console.log(response.text, 'extracted content');
 
-    return response.text; // or JSON.parse(response.text) if structured output expected
+    return response.text;
   }
 }
 

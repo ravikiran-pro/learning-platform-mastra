@@ -4,6 +4,8 @@ import { mastra } from "..";
 import ResourceDiscoveryAgentInstance from "../class/ResourceDiscoveryAgentInstance";
 import WebSearchAgentInstance from "../class/WebSearchAgentInstance";
 import ContentExtractorAgentInstance from "../class/ContentExtractorAgentInstance";
+import ContentWriterAgentInstance from "../class/ContentWritterAgentInstance";
+import { connectDB } from "../config/mongo";
 
 
 const ResourceSearchValidator = createStep({
@@ -84,6 +86,84 @@ const ContentExtractor = createStep({
     }
 });
 
+const finalize = createStep({
+    id: "finalize-content",
+    description: "Write and review blog for our section.",
+    inputSchema: z.object({
+        sectionContext: z.object(),
+        resources: z.array(
+            z.object({
+                title: z.string(),
+                url: z.string().url(),
+                summary: z.string(),
+                validate: z.boolean(),
+                scrap_content_id: z.string().nullable(),
+            })
+        ),
+        dump: z.string()
+    }).strict(),
+    outputSchema: z.object({
+        syntheses: z.string()
+    }),
+    execute: async ({ inputData }) => {
+
+        const { sectionContext, dump } = inputData;
+
+        const writerAgentTest: any = new ContentWriterAgentInstance()
+        const reviewerAgentTest = mastra.getAgent("contentReviewerAgent");
+
+        let approved = true, count = 0;
+        let reviewFeedback: string | null = null, previousOutput = null;
+
+        while (approved || count < 3) {
+            console.log(`Review Iteration ${count++}`)
+
+            const syntheses = await writerAgentTest.execute({
+                sectionContext: sectionContext,
+                extractedDump: dump,
+                reviewFeedback
+
+            })
+
+            console.log(syntheses)
+            const reviewResult = await reviewerAgentTest.generate(
+                [
+                    {
+                        role: "system",
+                        content: `Review and improve the following content: ${syntheses}`,
+                    },
+                    {
+                        role: "assistant",
+                        content: `Proceed Evaluating`,
+                    },
+                ]
+            )
+
+            let review = JSON.parse(reviewResult.text)
+
+            console.log(review)
+            if (!review.approved) {
+                reviewFeedback = `
+            🛑 Reviewer Issues:
+            ${review.issues.join("\n")}
+        
+            🛑 Reviewer Feedback:
+            ${review.recommendations}
+        `.trim();
+
+            } else {
+                approved = review.approved
+            }
+
+
+            previousOutput = syntheses;
+
+        }
+
+
+        return previousOutput
+    }
+});
 
 const synthesis = createStep({
     id: "synthesis-content",
@@ -106,9 +186,92 @@ const synthesis = createStep({
     }),
     execute: async ({ inputData }) => {
 
-        console.log(inputData , 'inputData step3');
+        const { sectionContext, dump }: any = inputData;
 
-        return {syntheses : 'syntheses'}
+        const writerAgentTest: any = new ContentWriterAgentInstance()
+        const reviewerAgentTest = mastra.getAgent("contentReviewerAgent");
+
+        let approved = false, count = 0;
+        let reviewFeedback: string | null = null, previousOutput = null;
+
+        const db = await connectDB();
+
+        while (!approved && count < 3) {
+            console.log(`Review Iteration ${count++}`)
+            const timestamp = new Date().toISOString();
+
+            const syntheses = await writerAgentTest.execute({
+                sectionContext: sectionContext,
+                extractedDump: dump,
+                reviewFeedback
+
+            })
+
+            console.log(syntheses)
+            const reviewResult = await reviewerAgentTest.generate(
+                [
+                    {
+                        role: "system",
+                        content: `Review and improve the following content: ${syntheses}`,
+                    },
+                    {
+                        role: "assistant",
+                        content: `Proceed Evaluating`,
+                    },
+                ]
+            )
+
+            let review = JSON.parse(reviewResult.text)
+
+            await db.collection("reviewer_documents").insertOne({
+                section_id: sectionContext.section.id,
+                document_id: sectionContext.section.contentDocumentId,
+                version: count + 1,
+                content: syntheses,
+                approved: review.approved,
+                issues: review.approved ? null : review.issues,
+                recommendations: review.recommendations || null,
+                createdAt: timestamp,
+            });
+
+
+
+            console.log(review)
+            if (!review.approved) {
+                reviewFeedback = `
+            🛑 Reviewer Issues:
+            ${review.issues.join("\n")}
+        
+            🛑 Reviewer Feedback:
+            ${review.recommendations}
+        `.trim();
+
+            } else {
+                approved = review.approved
+            }
+
+
+            previousOutput = syntheses;
+
+        }
+
+        if (approved) {
+            const timestamp = new Date().toISOString();
+            const trackCollection = `${sectionContext.track.id}-documents`;
+
+            await db.collection(trackCollection).insertOne({
+                document_id: sectionContext.section.contentDocumentId,
+                content: previousOutput,
+                createdAt: timestamp,
+            });
+
+            console.log("🔥 Final content approved and stored:", trackCollection);
+        } else {
+            console.log("❌ Max iterations reached. Content not approved.");
+        }
+
+
+        return previousOutput
     }
 });
 
@@ -131,13 +294,13 @@ export const keywordExtract = createStep({
         const { trackId, moduleId, chapterId, sectionId } = inputData;
 
         const resourceDiscoveryAgent = new ResourceDiscoveryAgentInstance();
-        const {sectionContext, queryConstructed} = await resourceDiscoveryAgent.execute({
+        const { sectionContext, queryConstructed } = await resourceDiscoveryAgent.execute({
             trackId,
             moduleId,
             chapterId,
             sectionId,
         });
-        
+
         // Return URLs for next step (scrape step)
         return { sectionContext, queryConstructed }
     },
@@ -171,4 +334,5 @@ export const wf_content_extraction_for_section = createWorkflow({
     .then(ResourceSearchValidator)
     .then(ContentExtractor)
     .then(synthesis)
+    // .then(finalize)
     .commit();
